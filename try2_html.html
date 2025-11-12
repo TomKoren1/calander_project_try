@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dynamic SQL Viewer</title>
+    <!-- Load Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: sans-serif; background-color: #f7f9fb; }
+        th { background-color: #f3f4f6; color: #1f2937; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; padding: 12px 16px; border-bottom: 1px solid #e5e7eb; }
+        td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #e5e7eb; }
+        tr:hover { background-color: #f0fdf4; }
+        .loading-spinner { border: 4px solid rgba(0, 0, 0, 0.1); border-left-color: #10b981; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="p-4 sm:p-8">
+
+    <div class="container mx-auto bg-white shadow-xl rounded-2xl p-6 md:p-10">
+
+        <header class="mb-8">
+            <h1 class="text-4xl font-bold text-gray-900 mb-2">Calendar Project Database Viewer</h1>
+            <p class="text-gray-500">
+                View data from any table in your **calander_project_try1** database.
+            </p>
+        </header>
+
+        <!-- Table Selector and Controls -->
+        <div class="mb-6 flex flex-col sm:flex-row gap-4 items-center">
+
+            <label for="table-select" class="font-medium text-gray-700">Select Table:</label>
+            <select
+                id="table-select"
+                class="w-full sm:w-64 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500 transition duration-150"
+                onchange="fetchTableData(this.value)"
+            >
+                <option value="">-- Loading Tables --</option>
+            </select>
+
+            <div id="record-count" class="text-sm text-gray-600 sm:ml-auto"></div>
+        </div>
+
+        <!-- Table Container -->
+        <div class="overflow-x-auto rounded-xl border border-gray-200 shadow-lg">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead id="table-header">
+                    <!-- Headers will be generated dynamically here -->
+                </thead>
+                <tbody id="table-body" class="bg-white divide-y divide-gray-200">
+                    <tr id="initial-loading-row">
+                        <td colspan="100" class="text-center py-10">
+                            <div class="flex justify-center items-center space-x-3 text-teal-600">
+                                <div class="loading-spinner"></div>
+                                <span class="font-medium">Connecting to API...</span>
+                            </div>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Error/Message Box -->
+        <div id="message-box" class="mt-4 p-4 text-sm rounded-lg hidden" role="alert"></div>
+    </div>
+
+    <script>
+        const tableSelect = document.getElementById('table-select');
+        const tableHeader = document.getElementById('table-header');
+        const tableBody = document.getElementById('table-body');
+        const recordCountElement = document.getElementById('record-count');
+        const messageBox = document.getElementById('message-box');
+
+        // ⚠️ --- THIS IS THE ONLY LINE THAT CHANGED --- ⚠️
+        const BASE_API_URL = 'http://127.0.0.1:5001/api/'; // Now pointing to the new, working port
+
+        function displayMessage(message, type = 'info') {
+            messageBox.textContent = message;
+            messageBox.className = `mt-4 p-4 text-sm rounded-lg ${type === 'error' ? 'bg-red-100 text-red-700 border border-red-400' : 'bg-blue-100 text-blue-700 border border-blue-400'}`;
+            messageBox.classList.remove('hidden');
+        }
+
+        function clearTable() {
+            tableHeader.innerHTML = '';
+            tableBody.innerHTML = '';
+            recordCountElement.textContent = '';
+            messageBox.classList.add('hidden');
+        }
+
+        /**
+         * Renders the fetched data dynamically, creating headers based on column keys.
+         */
+        function renderTable(data, tableName) {
+            clearTable();
+
+            if (data.length === 0) {
+                displayMessage(`Table **${tableName}** is empty.`, 'info');
+                const row = tableBody.insertRow();
+                const cell = row.insertCell();
+                cell.colSpan = 100; // Use a large number as columns are unknown
+                cell.className = 'text-center py-8 text-gray-500';
+                cell.textContent = `No records found in table '${tableName}'.`;
+                return;
+            }
+
+            // 1. Get Column Headers (Keys of the first object)
+            const columns = Object.keys(data[0]);
+
+            // 2. Render Header Row
+            const headerRow = tableHeader.insertRow();
+            columns.forEach(col => {
+                const th = document.createElement('th');
+                th.textContent = col.toUpperCase().replace(/_/g, ' '); // Format header for readability
+                th.className = 'px-6 py-3';
+                headerRow.appendChild(th);
+            });
+
+            // 3. Render Data Rows
+            data.forEach(item => {
+                const row = tableBody.insertRow();
+                columns.forEach(col => {
+                    const cell = row.insertCell();
+                    let value = item[col];
+                    // Simple formatting for readability
+                    if (value === null) {
+                        cell.textContent = 'NULL';
+                        cell.className = 'text-gray-400 italic';
+                    } else if (typeof value === 'object') {
+                         cell.textContent = JSON.stringify(value).substring(0, 50) + '...';
+                         cell.className = 'text-gray-500 font-mono text-xs';
+                    } else {
+                        cell.textContent = value;
+                    }
+                    if (col === 'id' || col.endsWith('_id')) {
+                        cell.className = 'text-gray-600 font-mono text-sm';
+                    }
+                });
+            });
+
+            recordCountElement.textContent = `${data.length} Records Shown in ${tableName}`;
+        }
+
+        /**
+         * Fetches data for the selected table.
+         */
+        async function fetchTableData(tableName) {
+            if (!tableName) return;
+            clearTable();
+            tableBody.innerHTML = `<tr><td colspan="100" class="text-center py-10"><div class="flex justify-center items-center space-x-3 text-teal-600"><div class="loading-spinner"></div><span class="font-medium">Fetching data from ${tableName}...</span></div></td></tr>`;
+
+            try {
+                const response = await fetch(`${BASE_API_URL}data/${tableName}`);
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || `HTTP error! Status: ${response.status}`);
+                }
+
+                renderTable(data, tableName);
+
+            } catch (error) {
+                console.error("Data Fetch Error:", error);
+                displayMessage(`Error loading data for ${tableName}: ${error.message}`, 'error');
+                clearTable();
+            }
+        }
+
+        /**
+         * Fetches the list of tables from the API and populates the dropdown.
+         */
+        async function fetchTableList() {
+            try {
+                const response = await fetch(`${BASE_API_URL}tables`);
+                const tables = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(tables.error || `HTTP error! Status: ${response.status}`);
+                }
+
+                tableSelect.innerHTML = '<option value="">-- Select a Table --</option>'; // Clear loading state
+                tables.forEach(tableName => {
+                    const option = document.createElement('option');
+                    option.value = tableName;
+                    option.textContent = tableName;
+                    tableSelect.appendChild(option);
+                });
+
+                document.getElementById('initial-loading-row').remove();
+
+            } catch (error) {
+                console.error("Table List Error:", error);
+                tableSelect.innerHTML = '<option value="">-- ERROR Loading Tables --</option>';
+                displayMessage(`Critical Error: Could not connect to API or load table list. Ensure 'app.py' is running. Details: ${error.message}`, 'error');
+            }
+        }
+
+        // Start the application by loading the table list
+        window.onload = fetchTableList;
+    </script>
+
+</body>
+</html>

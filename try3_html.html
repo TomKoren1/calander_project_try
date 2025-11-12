@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dynamic SQL Viewer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: sans-serif; background-color: #f7f9fb; }
+        th { background-color: #f3f4f6; color: #1f2937; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; padding: 12px 16px; border-bottom: 1px solid #e5e7eb; }
+        td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #e5e7eb; }
+        tr:hover { background-color: #f0fdf4; }
+        .loading-spinner { border: 4px solid rgba(0, 0, 0, 0.1); border-left-color: #10b981; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        /* Modal Styles */
+        #modal { display: none; } /* Hidden by default */
+        .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(0, 0, 0, 0.6); z-index: 40; }
+        .modal-content { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 50; }
+    </style>
+</head>
+<body class="p-4 sm:p-8">
+
+    <div class="container mx-auto bg-white shadow-xl rounded-2xl p-6 md:p-10">
+
+        <header class="mb-8">
+            <h1 class="text-4xl font-bold text-gray-900 mb-2">Calendar Project Database Viewer</h1>
+            <p class="text-gray-500">View and insert data into your **calander_project_try1** database.</p>
+        </header>
+
+        <!-- Controls -->
+        <div class="mb-6 flex flex-col sm:flex-row gap-4 items-center">
+            <label for="table-select" class="font-medium text-gray-700">Select Table:</label>
+            <select
+                id="table-select"
+                class="w-full sm:w-64 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500 transition duration-150"
+                onchange="fetchTableData(this.value)"
+            >
+                <option value="">-- Loading Tables --</option>
+            </select>
+
+            <!-- NEW: "Add New Item" Button -->
+            <button
+                id="add-item-btn"
+                class="hidden ml-4 px-5 py-3 bg-teal-600 text-white font-semibold rounded-lg shadow-md hover:bg-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 transition duration-150"
+                onclick="openInsertModal()"
+            >
+                Add New Item
+            </button>
+
+            <div id="record-count" class="text-sm text-gray-600 sm:ml-auto"></div>
+        </div>
+
+        <!-- Table Container -->
+        <div class="overflow-x-auto rounded-xl border border-gray-200 shadow-lg">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead id="table-header"></thead>
+                <tbody id="table-body" class="bg-white divide-y divide-gray-200">
+                    <tr id="initial-loading-row">
+                        <td colspan="100" class="text-center py-10">
+                            <div class="flex justify-center items-center space-x-3 text-teal-600">
+                                <div class="loading-spinner"></div>
+                                <span class="font-medium">Connecting to API...</span>
+                            </div>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Error/Message Box -->
+        <div id="message-box" class="mt-4 p-4 text-sm rounded-lg hidden" role="alert"></div>
+    </div>
+
+    <!-- NEW: Insert Modal Structure -->
+    <div id="modal" class="hidden">
+        <div class="modal-overlay" onclick="closeInsertModal()"></div>
+        <div class="modal-content bg-white w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden">
+            <!-- Modal Header -->
+            <div class="flex justify-between items-center p-6 border-b">
+                <h2 id="modal-title" class="text-2xl font-bold text-gray-900">Add New Item</h2>
+                <button onclick="closeInsertModal()" class="text-gray-400 hover:text-gray-600 text-3xl">&times;</button>
+            </div>
+            <!-- Modal Body (Dynamic Form) -->
+            <form id="modal-form" class="p-8 max-h-[60vh] overflow-y-auto space-y-4">
+                <!-- Dynamic form fields will be injected here by JavaScript -->
+            </form>
+            <!-- Modal Footer -->
+            <div class="flex justify-end p-6 border-t bg-gray-50">
+                <div id="modal-message-box" class="text-sm mr-auto" role="alert"></div>
+                <button
+                    onclick="closeInsertModal()"
+                    class="px-5 py-2 bg-gray-200 text-gray-700 font-semibold rounded-lg hover:bg-gray-300 transition duration-150 mr-3"
+                >
+                    Cancel
+                </button>
+                <button
+                    onclick="handleInsertSubmit()"
+                    class="px-5 py-2 bg-teal-600 text-white font-semibold rounded-lg shadow-md hover:bg-teal-700 transition duration-150"
+                >
+                    Save to Database
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const tableSelect = document.getElementById('table-select');
+        const tableHeader = document.getElementById('table-header');
+        const tableBody = document.getElementById('table-body');
+        const recordCountElement = document.getElementById('record-count');
+        const messageBox = document.getElementById('message-box');
+        const addItemBtn = document.getElementById('add-item-btn');
+        const modal = document.getElementById('modal');
+        const modalForm = document.getElementById('modal-form');
+        const modalTitle = document.getElementById('modal-title');
+        const modalMessageBox = document.getElementById('modal-message-box');
+
+        const BASE_API_URL = 'http://127.0.0.1:5001/api/';
+
+        // --- NEW GLOBAL STATE ---
+        let currentSelectedTable = "";
+        let currentTableColumns = [];
+        // Columns to ignore in the "Add New" form (auto-generated, etc.)
+        const IGNORE_COLUMNS = ['id', 'created_at', 'updated_at', 'deleted_at', 'last_synced_at', 'sent_at', 'linked_at', 'connected_at', 'last_used_at', 'uploaded_at'];
+
+        // --- Message & Table Functions (No changes) ---
+        function displayMessage(message, type = 'info', element = messageBox) {
+            element.textContent = message;
+            element.className = `p-4 text-sm rounded-lg ${type === 'error' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}`;
+            if(element === messageBox) element.classList.remove('hidden');
+        }
+        function clearTable() {
+            tableHeader.innerHTML = '';
+            tableBody.innerHTML = '';
+            recordCountElement.textContent = '';
+            messageBox.classList.add('hidden');
+            addItemBtn.classList.add('hidden'); // Hide button
+        }
+
+        // --- (UPDATED) Renders table and stores columns ---
+        function renderTable(data, tableName) {
+            clearTable();
+            currentSelectedTable = tableName;
+            addItemBtn.classList.remove('hidden'); // Show "Add" button
+
+            if (data.length === 0) {
+                displayMessage(`Table **${tableName}** is empty.`, 'info');
+                // --- (NEW) Still need columns for the form! ---
+                // If the table is empty, we can't get columns from data.
+                // This is a limitation. We'll ask the API for the schema in a v2.
+                // For now, we'll just show a message.
+                // We *could* fetch the schema, but let's stick to the data[0] for now.
+                // We'll hide the add button if the table is empty.
+                addItemBtn.classList.add('hidden');
+                const row = tableBody.insertRow();
+                row.insertCell().colSpan = 100;
+                row.cells[0].className = 'text-center py-8 text-gray-500';
+                row.cells[0].textContent = `No records found in table '${tableName}'. Add one to get started.`;
+                return;
+            }
+
+            const columns = Object.keys(data[0]);
+            currentTableColumns = columns; // Store columns globally
+
+            // Render Header
+            const headerRow = tableHeader.insertRow();
+            columns.forEach(col => {
+                const th = document.createElement('th');
+                th.textContent = col.toUpperCase().replace(/_/g, ' ');
+                th.className = 'px-6 py-3';
+                headerRow.appendChild(th);
+            });
+
+            // Render Data
+            data.forEach(item => {
+                const row = tableBody.insertRow();
+                columns.forEach(col => {
+                    const cell = row.insertCell();
+                    let value = item[col];
+                    if (value === null) cell.textContent = 'NULL';
+                    else if (typeof value === 'object') cell.textContent = JSON.stringify(value).substring(0, 50) + '...';
+                    else cell.textContent = value;
+                    if (col === 'id' || col.endsWith('_id')) cell.className = 'text-gray-600 font-mono text-sm';
+                });
+            });
+            recordCountElement.textContent = `${data.length} Records Shown in ${tableName}`;
+        }
+
+        // --- (UPDATED) Fetches data for the selected table ---
+        async function fetchTableData(tableName) {
+            if (!tableName) {
+                clearTable();
+                currentSelectedTable = "";
+                return;
+            }
+            clearTable();
+            tableBody.innerHTML = `<tr><td colspan="100" class="text-center py-10"><div class="flex justify-center items-center space-x-3 text-teal-600"><div class="loading-spinner"></div><span class="font-medium">Fetching data from ${tableName}...</span></div></td></tr>`;
+
+            try {
+                // Use the correct port!
+                const response = await fetch(`${BASE_API_URL}data/${tableName}`);
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || `HTTP error! Status: ${response.status}`);
+                renderTable(data, tableName);
+            } catch (error) {
+                console.error("Data Fetch Error:", error);
+                displayMessage(`Error loading data for ${tableName}: ${error.message}`, 'error');
+                clearTable();
+            }
+        }
+
+        // --- (UPDATED) Fetches table list (no change, just confirming) ---
+        async function fetchTableList() {
+            try {
+                const response = await fetch(`${BASE_API_URL}tables`);
+                const tables = await response.json();
+                if (!response.ok) throw new Error(tables.error || `HTTP error! Status: ${response.status}`);
+
+                tableSelect.innerHTML = '<option value="">-- Select a Table --</option>';
+                tables.forEach(tableName => {
+                    const option = document.createElement('option');
+                    option.value = tableName;
+                    option.textContent = tableName;
+                    tableSelect.appendChild(option);
+                });
+                document.getElementById('initial-loading-row').remove();
+            } catch (error) {
+                console.error("Table List Error:", error);
+                tableSelect.innerHTML = '<option value="">-- ERROR Loading Tables --</option>';
+                displayMessage(`Critical Error: Could not connect to API. Ensure 'app.py' is running on port 5001. Details: ${error.message}`, 'error');
+            }
+        }
+
+        // --- NEW: Modal Control Functions ---
+        function openInsertModal() {
+            if (currentTableColumns.length === 0) {
+                displayMessage("Cannot add item: table columns are unknown (table might be empty).", "error");
+                return;
+            }
+
+            modalTitle.textContent = `Add New Item to '${currentSelectedTable}'`;
+            modalForm.innerHTML = ''; // Clear previous form
+            modalMessageBox.innerHTML = ''; // Clear any old messages
+
+            // Build the form dynamically
+            currentTableColumns.forEach(col => {
+                // Ignore auto-generated columns
+                if (IGNORE_COLUMNS.includes(col.toLowerCase())) {
+                    return;
+                }
+
+                const div = document.createElement('div');
+                div.className = 'flex flex-col';
+
+                const label = document.createElement('label');
+                label.htmlFor = `form-input-${col}`;
+                label.textContent = col.replace(/_/g, ' '); // Make it readable
+                label.className = 'mb-1 font-semibold text-gray-700 capitalize';
+
+                const input = document.createElement('input');
+                input.type = 'text'; // Simplification: all inputs are text
+                // We could get clever and check col name for 'date', 'email', 'price'
+                if (col.includes('date') || col.includes('_at')) input.type = 'datetime-local';
+                if (col.includes('email')) input.type = 'email';
+                if (col.includes('price') || col.includes('priority') || col.includes('stock')) input.type = 'number';
+                if (col.startsWith('is_')) input.type = 'checkbox';
+
+                input.id = `form-input-${col}`;
+                input.name = col;
+
+                if (input.type === 'checkbox') {
+                    input.className = 'w-5 h-5 rounded text-teal-600 focus:ring-teal-500';
+                    div.className = 'flex flex-row-reverse items-center justify-end gap-x-2';
+                    div.appendChild(input); // Checkbox first
+                    div.appendChild(label); // Then label
+                } else {
+                    input.className = 'w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500';
+                    div.appendChild(label);
+                    div.appendChild(input);
+                }
+
+                modalForm.appendChild(div);
+            });
+
+            modal.style.display = 'block';
+        }
+
+        function closeInsertModal() {
+            modal.style.display = 'none';
+        }
+
+        async function handleInsertSubmit() {
+            const payload = {};
+
+            // Build the payload object from the form
+            currentTableColumns.forEach(col => {
+                if (IGNORE_COLUMNS.includes(col.toLowerCase())) return;
+
+                const input = document.getElementById(`form-input-${col}`);
+                if (input) {
+                    if (input.type === 'checkbox') {
+                        payload[col] = input.checked;
+                    } else if (input.type === 'datetime-local') {
+                        // Format for MySQL
+                        payload[col] = input.value ? input.value.replace('T', ' ') : null;
+                    } else {
+                        // Send null if the field is empty, otherwise send the value
+                        payload[col] = input.value === "" ? null : input.value;
+                    }
+                }
+            });
+
+            console.log("Sending payload:", payload);
+
+            try {
+                const response = await fetch(`${BASE_API_URL}data/${currentSelectedTable}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(payload),
+                });
+
+                const result = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(result.error || `HTTP error! Status: ${response.status}`);
+                }
+
+                // Success!
+                displayMessage(`Successfully added new item to ${currentSelectedTable}!`, 'info');
+                closeInsertModal();
+                fetchTableData(currentSelectedTable); // Refresh the table
+
+            } catch (error) {
+                console.error("Insert Error:", error);
+                // Show error inside the modal
+                displayMessage(error.message, 'error', modalMessageBox);
+            }
+        }
+
+        // --- Start the application ---
+        window.onload = fetchTableList;
+    </script>
+</body>
+</html>
