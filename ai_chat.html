@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Calendar Assistant</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
+        .chat-container { height: calc(100vh - 180px); }
+        .message-user { background-color: #0d9488; color: white; border-radius: 12px 12px 0 12px; }
+        .message-ai { background-color: white; color: #1f2937; border-radius: 12px 12px 12px 0; border: 1px solid #e5e7eb; }
+        .typing-dot { animation: typing 1.4s infinite ease-in-out both; }
+        .typing-dot:nth-child(1) { animation-delay: -0.32s; }
+        .typing-dot:nth-child(2) { animation-delay: -0.16s; }
+        @keyframes typing { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1); } }
+    </style>
+</head>
+<body class="h-screen flex flex-col items-center justify-center p-4">
+
+    <div class="w-full max-w-2xl bg-white shadow-2xl rounded-2xl overflow-hidden flex flex-col h-full max-h-[800px]">
+        
+        <!-- Header -->
+        <div class="bg-teal-700 p-4 text-white flex items-center justify-between shadow-md">
+            <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 bg-teal-500 rounded-full flex items-center justify-center font-bold text-xl">✨</div>
+                <div>
+                    <h1 class="font-bold text-lg">Calendar AI Agent</h1>
+                    <p class="text-xs text-teal-100 opacity-80">Powered by Gemini & MySQL</p>
+                </div>
+            </div>
+            <a href="database_viewer.html" class="text-xs bg-teal-800 hover:bg-teal-900 px-3 py-1 rounded transition">View Database</a>
+        </div>
+
+        <!-- Chat Area -->
+        <div id="chat-box" class="chat-container flex-1 overflow-y-auto p-6 space-y-4 bg-gray-50">
+            <!-- Welcome Message -->
+            <div class="flex flex-col items-start">
+                <div class="message-ai p-4 shadow-sm max-w-[80%]">
+                    Hello! I can help you manage your calendar. Try saying:
+                    <ul class="list-disc ml-5 mt-2 text-sm text-gray-600">
+                        <li>"Schedule a team meeting tomorrow at 2 PM"</li>
+                        <li>"Add a task to buy groceries due next Friday"</li>
+                        <li>"Create a lunch event on Dec 25th at noon"</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- Input Area -->
+        <div class="p-4 bg-white border-t border-gray-200">
+            <form id="chat-form" class="flex gap-2" onsubmit="sendMessage(event)">
+                <input 
+                    type="text" 
+                    id="user-input" 
+                    class="flex-1 p-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 transition"
+                    placeholder="Type your request here..."
+                    autocomplete="off"
+                >
+                <button 
+                    type="submit" 
+                    id="send-btn"
+                    class="bg-teal-600 hover:bg-teal-700 text-white px-6 py-3 rounded-xl font-semibold shadow-md transition flex items-center justify-center min-w-[100px]"
+                >
+                    Send
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const chatBox = document.getElementById('chat-box');
+        const userInput = document.getElementById('user-input');
+        const sendBtn = document.getElementById('send-btn');
+        const BASE_API_URL = 'http://127.0.0.1:5001/api/chat';
+
+        function appendMessage(text, isUser) {
+            const wrapper = document.createElement('div');
+            wrapper.className = isUser ? 'flex flex-col items-end' : 'flex flex-col items-start';
+            
+            const bubble = document.createElement('div');
+            bubble.className = (isUser ? 'message-user' : 'message-ai') + ' p-4 shadow-sm max-w-[80%] whitespace-pre-wrap';
+            bubble.textContent = text;
+            
+            wrapper.appendChild(bubble);
+            chatBox.appendChild(wrapper);
+            chatBox.scrollTop = chatBox.scrollHeight; // Auto scroll to bottom
+        }
+
+        function showLoading() {
+            const wrapper = document.createElement('div');
+            wrapper.id = 'loading-bubble';
+            wrapper.className = 'flex flex-col items-start';
+            wrapper.innerHTML = `
+                <div class="message-ai p-4 shadow-sm flex space-x-2">
+                    <div class="w-2 h-2 bg-gray-400 rounded-full typing-dot"></div>
+                    <div class="w-2 h-2 bg-gray-400 rounded-full typing-dot"></div>
+                    <div class="w-2 h-2 bg-gray-400 rounded-full typing-dot"></div>
+                </div>
+            `;
+            chatBox.appendChild(wrapper);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        function removeLoading() {
+            const loading = document.getElementById('loading-bubble');
+            if (loading) loading.remove();
+        }
+
+        async function sendMessage(event) {
+            event.preventDefault();
+            const text = userInput.value.trim();
+            if (!text) return;
+
+            // 1. Show user message
+            appendMessage(text, true);
+            userInput.value = '';
+            userInput.disabled = true;
+            sendBtn.disabled = true;
+
+            // 2. Show loading animation
+            showLoading();
+
+            try {
+                // 3. Send to API
+                const response = await fetch(BASE_API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: text })
+                });
+
+                const data = await response.json();
+
+                // 4. Show AI response
+                removeLoading();
+                if (data.error) {
+                    appendMessage("⚠️ Error: " + data.error, false);
+                } else {
+                    appendMessage(data.response, false);
+                }
+
+            } catch (error) {
+                removeLoading();
+                appendMessage("⚠️ Network Error: Could not reach the server.", false);
+                console.error(error);
+            } finally {
+                userInput.disabled = false;
+                sendBtn.disabled = false;
+                userInput.focus();
+            }
+        }
+    </script>
+</body>
+</html>
