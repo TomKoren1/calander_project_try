@@ -6,8 +6,6 @@ from flask import Flask, jsonify, make_response, request
 from flask_cors import CORS
 import mysql.connector
 from dotenv import load_dotenv
-
-# --- NEW: Import Google Gemini ---
 import google.generativeai as genai
 from google.generativeai.types import FunctionDeclaration, Tool
 
@@ -62,21 +60,21 @@ def get_default_user_id():
         cnx.close()
         if result:
             return result[0]
-        return "00000000-0000-0000-0000-000000000000" # Fallback dummy ID
+        return "00000000-0000-0000-0000-000000000000" 
     except:
         return "00000000-0000-0000-0000-000000000000"
 
-# --- 4. AI TOOLS (The Functions Gemini can call) ---
+# --- 4. ⭐️ AI TOOLS ⭐️ ---
 
-def create_event_tool(title: str, start_time: str, end_time: str, description: str = ""):
+def create_event_tool(title: str, start_time: str, end_time: str, description: str):
     """
     Creates a new calendar event in the database.
     
     Args:
-        title: The title of the event (e.g., "Meeting with Bob").
+        title: The title of the event.
         start_time: Start time in 'YYYY-MM-DD HH:MM:SS' format.
         end_time: End time in 'YYYY-MM-DD HH:MM:SS' format.
-        description: (Optional) A short description.
+        description: A description. If the user provided details, use them. If not, generate a GENERIC, FACTUAL description based on the title.
     """
     try:
         print(f"--- AI TOOL: Creating Event '{title}' ---")
@@ -98,13 +96,14 @@ def create_event_tool(title: str, start_time: str, end_time: str, description: s
     except Exception as e:
         return f"Error creating event: {str(e)}"
 
-def create_task_tool(title: str, due_date: str):
+def create_task_tool(title: str, due_date: str, description: str):
     """
     Creates a new task in the database.
     
     Args:
-        title: The task name (e.g., "Buy Milk").
+        title: The task name.
         due_date: Due date in 'YYYY-MM-DD' format.
+        description: A short description. If missing, generate a generic category description.
     """
     try:
         print(f"--- AI TOOL: Creating Task '{title}' ---")
@@ -115,10 +114,10 @@ def create_task_tool(title: str, due_date: str):
         cursor = cnx.cursor()
         
         query = """
-            INSERT INTO tasks (id, user_id, title, due_date, status)
-            VALUES (%s, %s, %s, %s, 'pending')
+            INSERT INTO tasks (id, user_id, title, due_date, description, status)
+            VALUES (%s, %s, %s, %s, %s, 'pending')
         """
-        cursor.execute(query, (new_id, user_id, title, due_date))
+        cursor.execute(query, (new_id, user_id, title, due_date, description))
         cnx.commit()
         cursor.close()
         cnx.close()
@@ -129,7 +128,7 @@ def create_task_tool(title: str, due_date: str):
 # Define the dictionary of tools for Gemini
 tools_list = [create_event_tool, create_task_tool]
 
-# --- 5. EXISTING API ROUTES (Tables, CRUD) ---
+# --- 5. EXISTING API ROUTES ---
 @app.route('/', methods=['GET'])
 def home():
     return jsonify({"message": "Welcome! Server is responding.", "status": "Online"})
@@ -146,7 +145,6 @@ def get_table_list():
 
 @app.route('/api/data/<table_name>', methods=['GET', 'POST'])
 def handle_table_data(table_name):
-    # ... (Your existing validation logic here) ...
     try:
         cnx_val = mysql.connector.connect(**MYSQL_CONFIG)
         all_tables = get_validated_tables(cnx_val)
@@ -194,7 +192,6 @@ def handle_table_data(table_name):
 
 @app.route('/api/data/<table_name>/<item_id>', methods=['PUT', 'DELETE'])
 def handle_item(table_name, item_id):
-    # ... (Your existing PUT/DELETE logic here) ...
     if request.method == 'DELETE':
         try:
             cnx = mysql.connector.connect(**MYSQL_CONFIG)
@@ -226,49 +223,62 @@ def handle_item(table_name, item_id):
             return make_response(jsonify({"error": str(e)}), 400)
 
 
-# --- 6. ⭐️ NEW AI CHAT ROUTE (Updated for Gemini 2.0) ⭐️ ---
+# --- 6. ⭐️ AI CHAT WITH MEMORY ⭐️ ---
+
+# Initialize global variable to hold history
+chat_session = None
+
 @app.route('/api/chat', methods=['POST'])
 def chat_with_ai():
+    global chat_session # Use the global variable
+    
     try:
         user_message = request.json.get('message', '')
         
-        # ⭐️ UPDATE: Using a model from your available list ⭐️
-        model_name = 'gemini-2.0-flash' 
-        
-        model = genai.GenerativeModel(model_name, tools=tools_list)
-        
-        # 2. Start a chat session (enable automatic function calling)
-        chat = model.start_chat(enable_automatic_function_calling=True)
-        
-        # 3. Create System Prompt
+        # 1. Initialize Chat Only Once (Preserves Memory)
+        if chat_session is None:
+            # We put the "Personality" here so it persists
+            system_instruction = """
+            You are a helpful and professional Calendar Assistant.
+            Your Goal: Create events and tasks based on user requests.
+            Guidelines:
+            1. If details are missing, ASK the user for them.
+            2. Remember what the user said in previous messages.
+            3. Do not invent specific agenda items (hallucinations).
+            """
+            
+            model = genai.GenerativeModel(
+                'gemini-2.0-flash', 
+                tools=tools_list,
+                system_instruction=system_instruction
+            )
+            chat_session = model.start_chat(enable_automatic_function_calling=True)
+            print("--- AI: New Chat Session Started ---")
+
+        # 2. Add "Hidden" Context to EVERY message (Time/Date)
+        # We must send this every time so the AI knows "Tomorrow" relative to NOW.
         today_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         day_name = datetime.now().strftime("%A")
         
-        system_context = f"""
-        You are a helpful Calendar Assistant.
-        Current Date/Time: {day_name}, {today_str}.
-        
-        If the user asks to create an event or task, use the provided tools.
-        For events, assume a default duration of 1 hour if not specified.
-        If the user doesn't specify a year, assume the current year.
-        Answer briefly and confirm when an action is taken.
+        # This is what the AI actually sees (hidden form the user)
+        context_prompt = f"""
+        [SYSTEM NOTE: Current Time is {day_name}, {today_str}]
+        User says: {user_message}
         """
         
-        # 4. Send message
-        full_prompt = f"{system_context}\n\nUser: {user_message}"
-        response = chat.send_message(full_prompt)
+        # 3. Send message
+        response = chat_session.send_message(context_prompt)
         
-        # 5. Return result
-        # Handle cases where response might be blocked or empty
         if not response.parts:
-             return jsonify({"response": "I processed the action, but I have no text response."})
+             return jsonify({"response": "Action completed."})
              
         return jsonify({"response": response.text})
 
     except Exception as e:
         print(f"AI Error: {e}")
-        # Return a clean error so we see it in the chat bubble
-        return make_response(jsonify({"error": f"Model Error ({model_name}): {str(e)}"}), 500)
+        # If error, maybe reset chat?
+        # chat_session = None 
+        return make_response(jsonify({"error": f"AI Error: {str(e)}"}), 500)
 
 if __name__ == '__main__':
     print("--- Starting Flask server on http://127.0.0.1:5001 ---")
