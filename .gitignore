@@ -22,3 +22,9 @@ Thumbs.db
 Any local config files with secrets
 
 .env
+
+# Node.js / React Ignores
+node_modules/
+dist/
+npm-debug.log
+.DS_Store

@@ -1,0 +1,50 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom Overrides for React Big Calendar to look more like Google Calendar */
+
+/* Calendar Header Buttons */
+.rbc-toolbar button {
+  border: 1px solid #e5e7eb !important;
+  color: #374151 !important;
+  border-radius: 6px !important;
+  padding: 6px 12px !important;
+  font-size: 0.875rem !important;
+  margin-left: 4px !important;
+}
+
+.rbc-toolbar button:hover {
+  background-color: #f9fafb !important;
+}
+
+.rbc-toolbar button.rbc-active {
+  background-color: #0d9488 !important; /* Teal */
+  color: white !important;
+  border-color: #0d9488 !important;
+  box-shadow: none !important;
+}
+
+/* Today Cell Background */
+.rbc-today {
+  background-color: #f0fdfa !important; /* Very light teal */
+}
+
+/* Header Text */
+.rbc-toolbar-label {
+  font-weight: 700 !important;
+  font-size: 1.25rem !important;
+  color: #111827 !important;
+}
+
+/* Grid Lines */
+.rbc-header {
+  padding: 12px 0 !important;
+  font-weight: 600 !important;
+  color: #6b7280 !important;
+  border-bottom: 1px solid #e5e7eb !important;
+}
+
+.rbc-month-view, .rbc-time-view, .rbc-agenda-view {
+  border-color: #e5e7eb !important;
+}
