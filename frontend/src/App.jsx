@@ -4,6 +4,9 @@ import {
   Clock, CheckCircle2, Trash2, Edit2, X, Save 
 } from 'lucide-react';
 
+// Import the new Chat Widget
+import ChatWidget from './components/ChatWidget';
+
 const API_BASE = 'http://127.0.0.1:5001/api/data';
 
 function App() {
@@ -13,11 +16,9 @@ function App() {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(null);
 
-  // --- Modal State ---
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
   
-  // --- Form State ---
   const [formData, setFormData] = useState({
     title: '',
     desc: '',
@@ -26,7 +27,6 @@ function App() {
     dueDate: ''
   });
 
-  // --- Fetch Data ---
   const fetchData = async () => {
     setLoading(true);
     setError(null);
@@ -47,7 +47,7 @@ function App() {
 
       const formattedEvents = rawEvents.map(evt => ({
         id: evt.id,
-        type: 'event', // Maps to 'events' table
+        type: 'event',
         title: evt.title,
         start: new Date(evt.start_time),
         end: new Date(evt.end_time),
@@ -64,7 +64,7 @@ function App() {
 
         return {
           id: task.id,
-          type: 'task', // Maps to 'tasks' table
+          type: 'task',
           title: task.title,
           start: adjustedDate, 
           end: adjustedDate, 
@@ -80,7 +80,7 @@ function App() {
 
     } catch (err) {
       console.error("Failed to fetch data:", err);
-      setError("Could not load data. Is app.py running?");
+      setError("Could not load data. Is backend server.js running?");
     } finally {
       setLoading(false);
     }
@@ -90,45 +90,21 @@ function App() {
     fetchData();
   }, []);
 
-  // --- CRUD Operations ---
-
+  // --- CRUD Functions (unchanged from before) ---
   const handleDelete = async (item) => {
     if (!confirm(`Are you sure you want to delete "${item.title}"?`)) return;
-
     const tableName = item.type === 'event' ? 'events' : 'tasks';
-    
     try {
-      const response = await fetch(`${API_BASE}/${tableName}/${item.id}`, {
-        method: 'DELETE'
-      });
-      const result = await response.json();
-      
-      if (!response.ok) throw new Error(result.error);
-      
-      // Refresh UI
+      const response = await fetch(`${API_BASE}/${tableName}/${item.id}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error('Delete failed');
       fetchData();
-    } catch (err) {
-      alert(`Error deleting item: ${err.message}`);
-    }
+    } catch (err) { alert(err.message); }
   };
 
   const handleEditClick = (item) => {
     setEditingItem(item);
-    
-    // Format dates for HTML inputs
-    // For Datetime-local: YYYY-MM-DDTHH:MM
-    const formatDateTime = (date) => {
-      const offset = date.getTimezoneOffset() * 60000;
-      const localDate = new Date(date.getTime() - offset);
-      return localDate.toISOString().slice(0, 16);
-    };
-
-    // For Date only: YYYY-MM-DD
-    const formatDate = (date) => {
-      const offset = date.getTimezoneOffset() * 60000;
-      const localDate = new Date(date.getTime() - offset);
-      return localDate.toISOString().slice(0, 10);
-    };
+    const formatDateTime = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+    const formatDate = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 
     setFormData({
       title: item.title,
@@ -137,25 +113,16 @@ function App() {
       end: item.type === 'event' ? formatDateTime(item.end) : '',
       dueDate: item.type === 'task' ? formatDate(item.start) : ''
     });
-    
     setIsModalOpen(true);
   };
 
   const handleSave = async (e) => {
     e.preventDefault();
     if (!editingItem) return;
-
     const tableName = editingItem.type === 'event' ? 'events' : 'tasks';
-    
-    // Construct Payload based on type
-    let payload = {
-      title: formData.title,
-      description: formData.desc
-    };
+    let payload = { title: formData.title, description: formData.desc };
 
     if (editingItem.type === 'event') {
-      // MySQL expects 'YYYY-MM-DD HH:MM:SS', but HTML gives 'YYYY-MM-DDTHH:MM'
-      // We replace T with space
       payload.start_time = formData.start.replace('T', ' ');
       payload.end_time = formData.end.replace('T', ' ');
     } else {
@@ -168,18 +135,13 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      const result = await response.json();
-
-      if (!response.ok) throw new Error(result.error);
-
+      if (!response.ok) throw new Error('Update failed');
       setIsModalOpen(false);
       fetchData();
-    } catch (err) {
-      alert(`Error updating item: ${err.message}`);
-    }
+    } catch (err) { alert(err.message); }
   };
 
-  // --- Date Helpers (Same as before) ---
+  // --- Date Helpers ---
   const getDaysInMonth = (date) => new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
   const getFirstDayOfMonth = (date) => new Date(date.getFullYear(), date.getMonth(), 1).getDay();
   const addMonths = (n) => {
@@ -191,7 +153,6 @@ function App() {
   const isSameDay = (d1, d2) => d1.getDate() === d2.getDate() && d1.getMonth() === d2.getMonth() && d1.getFullYear() === d2.getFullYear();
   const isToday = (date) => isSameDay(date, new Date());
 
-  // --- Render Logic ---
   const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
   const daysInMonth = getDaysInMonth(currentDate);
   const firstDay = getFirstDayOfMonth(currentDate);
@@ -222,15 +183,9 @@ function App() {
         </div>
         
         <div className="flex items-center space-x-3 bg-gray-100 p-1 rounded-xl">
-          <button onClick={() => addMonths(-1)} className="p-2 hover:bg-white rounded-lg transition-all shadow-sm hover:shadow text-gray-600">
-            <ChevronLeft size={18} />
-          </button>
-          <span className="px-4 font-bold text-gray-700 w-40 text-center select-none">
-            {monthNames[currentDate.getMonth()]} {currentDate.getFullYear()}
-          </span>
-          <button onClick={() => addMonths(1)} className="p-2 hover:bg-white rounded-lg transition-all shadow-sm hover:shadow text-gray-600">
-            <ChevronRight size={18} />
-          </button>
+          <button onClick={() => addMonths(-1)} className="p-2 hover:bg-white rounded-lg transition-all shadow-sm hover:shadow text-gray-600"><ChevronLeft size={18} /></button>
+          <span className="px-4 font-bold text-gray-700 w-40 text-center select-none">{monthNames[currentDate.getMonth()]} {currentDate.getFullYear()}</span>
+          <button onClick={() => addMonths(1)} className="p-2 hover:bg-white rounded-lg transition-all shadow-sm hover:shadow text-gray-600"><ChevronRight size={18} /></button>
         </div>
 
         <div className="flex space-x-3">
@@ -255,9 +210,7 @@ function App() {
             {/* Calendar Grid */}
             <div className="flex-1 bg-white rounded-2xl shadow-sm border border-gray-200 flex flex-col overflow-hidden">
               <div className="grid grid-cols-7 border-b border-gray-100 bg-gray-50/50">
-                {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
-                  <div key={day} className="py-3 text-center text-xs font-bold text-gray-400 uppercase tracking-wider">{day}</div>
-                ))}
+                {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => <div key={day} className="py-3 text-center text-xs font-bold text-gray-400 uppercase tracking-wider">{day}</div>)}
               </div>
               <div className="flex-1 grid grid-cols-7 grid-rows-6">
                 {totalSlots.map((dayDate, index) => {
@@ -266,19 +219,10 @@ function App() {
                   const isSelected = selectedDate && isSameDay(dayDate, selectedDate);
                   const isCurrentDay = isToday(dayDate);
                   return (
-                    <div key={index} onClick={() => setSelectedDate(dayDate)}
-                      className={`border-r border-b border-gray-100 p-2 relative transition-all cursor-pointer flex flex-col gap-1 group ${isSelected ? 'bg-indigo-50 ring-inset ring-2 ring-indigo-500 z-10' : 'hover:bg-gray-50'} ${isCurrentDay ? 'bg-blue-50/30' : ''}`}
-                    >
-                      <div className="flex justify-between items-start mb-1">
-                        <span className={`text-sm font-medium w-7 h-7 flex items-center justify-center rounded-full transition-colors ${isCurrentDay ? 'bg-blue-600 text-white shadow-md' : 'text-gray-700 group-hover:bg-gray-200'}`}>{dayDate.getDate()}</span>
-                      </div>
+                    <div key={index} onClick={() => setSelectedDate(dayDate)} className={`border-r border-b border-gray-100 p-2 relative transition-all cursor-pointer flex flex-col gap-1 group ${isSelected ? 'bg-indigo-50 ring-inset ring-2 ring-indigo-500 z-10' : 'hover:bg-gray-50'} ${isCurrentDay ? 'bg-blue-50/30' : ''}`}>
+                      <div className="flex justify-between items-start mb-1"><span className={`text-sm font-medium w-7 h-7 flex items-center justify-center rounded-full transition-colors ${isCurrentDay ? 'bg-blue-600 text-white shadow-md' : 'text-gray-700 group-hover:bg-gray-200'}`}>{dayDate.getDate()}</span></div>
                       <div className="flex-1 overflow-y-auto space-y-1 scrollbar-hide">
-                        {dayItems.slice(0, 4).map(item => (
-                          <div key={item.id} className={`text-[10px] truncate px-1.5 py-0.5 rounded font-medium ${item.color} border-l-2 flex items-center`}>
-                            {item.type === 'task' && <div className="w-1 h-1 rounded-full bg-amber-500 mr-1 shrink-0" />}
-                            {item.title}
-                          </div>
-                        ))}
+                        {dayItems.slice(0, 4).map(item => (<div key={item.id} className={`text-[10px] truncate px-1.5 py-0.5 rounded font-medium ${item.color} border-l-2 flex items-center`}>{item.type === 'task' && <div className="w-1 h-1 rounded-full bg-amber-500 mr-1 shrink-0" />} {item.title}</div>))}
                         {dayItems.length > 4 && <div className="text-[10px] text-gray-400 pl-1 font-medium">+ {dayItems.length - 4} more</div>}
                       </div>
                     </div>
@@ -287,24 +231,15 @@ function App() {
               </div>
             </div>
 
-            {/* Side Panel: Details */}
+            {/* Side Panel */}
             <div className="w-full lg:w-96 bg-white rounded-2xl shadow-xl border border-gray-200 flex flex-col overflow-hidden transform transition-all">
               <div className="p-6 border-b border-gray-100 bg-gradient-to-r from-gray-50 to-white">
                 <h2 className="text-xl font-bold text-gray-800">
-                  {selectedDate ? (
-                    <>{selectedDate.toLocaleDateString('en-US', { weekday: 'long' })} <span className="block text-sm font-medium text-gray-500 mt-1">{selectedDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</span></>
-                  ) : <span className="text-gray-400">Select a date</span>}
+                  {selectedDate ? (<>{selectedDate.toLocaleDateString('en-US', { weekday: 'long' })} <span className="block text-sm font-medium text-gray-500 mt-1">{selectedDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</span></>) : <span className="text-gray-400">Select a date</span>}
                 </h2>
               </div>
               <div className="flex-1 p-4 overflow-y-auto bg-gray-50/50">
-                {!selectedDate ? (
-                  <div className="h-full flex flex-col items-center justify-center text-gray-400 text-center space-y-4">
-                    <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center"><CalendarIcon size={32} className="opacity-40" /></div>
-                    <p className="text-sm font-medium">Select a date on the grid<br/>to view your schedule</p>
-                  </div>
-                ) : getItemsForDay(selectedDate).length === 0 ? (
-                  <div className="h-full flex flex-col items-center justify-center text-gray-400 text-center"><p className="text-sm">No plans for this day.</p></div>
-                ) : (
+                {!selectedDate ? <div className="h-full flex flex-col items-center justify-center text-gray-400 text-center space-y-4"><div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center"><CalendarIcon size={32} className="opacity-40" /></div><p className="text-sm font-medium">Select a date on the grid<br/>to view your schedule</p></div> : getItemsForDay(selectedDate).length === 0 ? <div className="h-full flex flex-col items-center justify-center text-gray-400 text-center"><p className="text-sm">No plans for this day.</p></div> : (
                   <div className="space-y-3">
                     {getItemsForDay(selectedDate).map(item => (
                       <div key={item.id} className={`group p-4 rounded-xl border ${item.borderColor} bg-white shadow-sm hover:shadow-md transition-all hover:-translate-y-0.5`}>
@@ -313,20 +248,13 @@ function App() {
                             {item.type === 'event' ? <span className="bg-teal-100 p-1.5 rounded-md text-teal-700"><Clock size={14} /></span> : <span className="bg-amber-100 p-1.5 rounded-md text-amber-700"><CheckCircle2 size={14} /></span>}
                             <h3 className="font-bold text-gray-800 text-sm leading-tight">{item.title}</h3>
                           </div>
-                          {/* ⭐️ NEW: Action Buttons ⭐️ */}
                           <div className="flex space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button onClick={() => handleEditClick(item)} className="p-1.5 rounded-md hover:bg-gray-100 text-gray-500 hover:text-blue-600 transition-colors" title="Edit">
-                                <Edit2 size={14} />
-                            </button>
-                            <button onClick={() => handleDelete(item)} className="p-1.5 rounded-md hover:bg-red-50 text-gray-500 hover:text-red-600 transition-colors" title="Delete">
-                                <Trash2 size={14} />
-                            </button>
+                            <button onClick={() => handleEditClick(item)} className="p-1.5 rounded-md hover:bg-gray-100 text-gray-500 hover:text-blue-600 transition-colors"><Edit2 size={14} /></button>
+                            <button onClick={() => handleDelete(item)} className="p-1.5 rounded-md hover:bg-red-50 text-gray-500 hover:text-red-600 transition-colors"><Trash2 size={14} /></button>
                           </div>
                         </div>
                         <div className="pl-9">
-                            {item.type === 'event' ? (
-                                <div className="text-xs font-semibold text-gray-500 mb-2">{item.start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - {item.end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
-                            ) : (<div className="text-xs font-bold text-amber-600 mb-2 uppercase tracking-wide">Due Today</div>)}
+                            {item.type === 'event' ? <div className="text-xs font-semibold text-gray-500 mb-2">{item.start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - {item.end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div> : <div className="text-xs font-bold text-amber-600 mb-2 uppercase tracking-wide">Due Today</div>}
                             {item.desc && <p className="text-xs text-gray-600 bg-gray-50 p-2.5 rounded-lg border border-gray-100 leading-relaxed">{item.desc}</p>}
                         </div>
                       </div>
@@ -339,50 +267,27 @@ function App() {
         )}
       </main>
 
-      {/* ⭐️ NEW: Edit Modal ⭐️ */}
+      {/* ⭐️ NEW: Chat Widget (Connected to fetchData) ⭐️ */}
+      <ChatWidget onActionComplete={fetchData} />
+
+      {/* Edit Modal (Same as before) */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all scale-100">
                 <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-                    <h3 className="text-lg font-bold text-gray-800">Edit {editingItem?.type === 'event' ? 'Event' : 'Task'}</h3>
+                    <h3 className="text-lg font-bold text-gray-800">Edit Item</h3>
                     <button onClick={() => setIsModalOpen(false)} className="text-gray-400 hover:text-gray-600 p-1 hover:bg-gray-200 rounded-full transition"><X size={20} /></button>
                 </div>
                 <form onSubmit={handleSave} className="p-6 space-y-4">
-                    <div>
-                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Title</label>
-                        <input type="text" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-teal-500 focus:bg-white transition outline-none font-medium" />
-                    </div>
-                    
-                    {/* Conditional Fields based on Type */}
+                    <div><label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Title</label><input type="text" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-teal-500 outline-none font-medium" /></div>
                     {editingItem?.type === 'event' ? (
                         <div className="grid grid-cols-2 gap-4">
-                            <div>
-                                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Start</label>
-                                <input type="datetime-local" value={formData.start} onChange={e => setFormData({...formData, start: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-teal-500 transition outline-none text-sm" />
-                            </div>
-                            <div>
-                                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">End</label>
-                                <input type="datetime-local" value={formData.end} onChange={e => setFormData({...formData, end: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-teal-500 transition outline-none text-sm" />
-                            </div>
+                            <div><label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Start</label><input type="datetime-local" value={formData.start} onChange={e => setFormData({...formData, start: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-teal-500 outline-none text-sm" /></div>
+                            <div><label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">End</label><input type="datetime-local" value={formData.end} onChange={e => setFormData({...formData, end: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-teal-500 outline-none text-sm" /></div>
                         </div>
-                    ) : (
-                        <div>
-                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Due Date</label>
-                            <input type="date" value={formData.dueDate} onChange={e => setFormData({...formData, dueDate: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-teal-500 transition outline-none text-sm" />
-                        </div>
-                    )}
-
-                    <div>
-                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Description</label>
-                        <textarea rows="3" value={formData.desc} onChange={e => setFormData({...formData, desc: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-teal-500 focus:bg-white transition outline-none text-sm"></textarea>
-                    </div>
-
-                    <div className="flex justify-end pt-2">
-                        <button type="button" onClick={() => setIsModalOpen(false)} className="mr-3 px-5 py-2.5 text-sm font-semibold text-gray-600 hover:bg-gray-100 rounded-xl transition">Cancel</button>
-                        <button type="submit" className="flex items-center px-5 py-2.5 bg-teal-600 text-white text-sm font-semibold rounded-xl hover:bg-teal-700 shadow-lg hover:shadow-xl transition transform active:scale-95">
-                            <Save size={16} className="mr-2" /> Save Changes
-                        </button>
-                    </div>
+                    ) : (<div><label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Due Date</label><input type="date" value={formData.dueDate} onChange={e => setFormData({...formData, dueDate: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-teal-500 outline-none text-sm" /></div>)}
+                    <div><label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Description</label><textarea rows="3" value={formData.desc} onChange={e => setFormData({...formData, desc: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-teal-500 outline-none text-sm"></textarea></div>
+                    <div className="flex justify-end pt-2"><button type="button" onClick={() => setIsModalOpen(false)} className="mr-3 px-5 py-2.5 text-sm font-semibold text-gray-600 hover:bg-gray-100 rounded-xl transition">Cancel</button><button type="submit" className="flex items-center px-5 py-2.5 bg-teal-600 text-white text-sm font-semibold rounded-xl hover:bg-teal-700 shadow-lg hover:shadow-xl transition transform active:scale-95"><Save size={16} className="mr-2" /> Save Changes</button></div>
                 </form>
             </div>
         </div>
