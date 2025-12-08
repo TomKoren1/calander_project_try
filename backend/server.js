@@ -4,6 +4,7 @@ const mysql = require('mysql2/promise');
 const dotenv = require('dotenv');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { v4: uuidv4 } = require('uuid');
+const OpenAI = require('openai');
 
 // --- 1. SETUP ---
 dotenv.config();
@@ -12,6 +13,11 @@ const PORT = 5001;
 
 app.use(cors());
 app.use(express.json());
+
+// --- NEW: IN-MEMORY CHAT STORAGE ---
+// This will hold the chat history while the server is running.
+// If you restart the server, the memory is wiped (which is fine for testing).
+const activeChats = {}; 
 
 // --- 2. DATABASE CONNECTION ---
 const pool = mysql.createPool({
@@ -23,14 +29,12 @@ const pool = mysql.createPool({
 });
 
 // --- 3. HELPER FUNCTIONS ---
-
-// We need a valid User ID because the database requires it (NOT NULL)
 async function getDefaultUserId() {
     try {
         const [rows] = await pool.query("SELECT id FROM users LIMIT 1");
         if (rows.length === 0) {
-            console.error("❌ ERROR: No users found in DB. Please create a user manually first.");
-            return "00000000-0000-0000-0000-000000000000"; // Fallback (might fail in DB)
+            console.error("❌ ERROR: No users found. Create a user first.");
+            return "00000000-0000-0000-0000-000000000000";
         }
         return rows[0].id;
     } catch (error) {
@@ -39,40 +43,33 @@ async function getDefaultUserId() {
     }
 }
 
-// --- 4. TOOL IMPLEMENTATIONS (The actual SQL Logic) ---
+// --- 4. TOOL IMPLEMENTATIONS ---
 const toolsMap = {
-    // Tool 1: Create a Task
     create_task: async ({ title, due_datetime, description, priority }) => {
         console.log(`Executing: Create Task "${title}"`);
         const userId = await getDefaultUserId();
         const newId = uuidv4();
         
         await pool.query(
-            `INSERT INTO tasks 
-            (id, user_id, title, description, due_datetime, status, priority, is_flagged) 
-            VALUES (?, ?, ?, ?, ?, 'pending', ?, FALSE)`,
+            `INSERT INTO tasks (id, user_id, title, description, due_date, status, priority, is_flagged) VALUES (?, ?, ?, ?, ?, 'pending', ?, FALSE)`,
             [newId, userId, title, description || '', due_datetime, priority || 1]
         );
         return `Success! Task created with ID: ${newId}`;
     },
-
-    // Tool 2: Create an Event
     create_event: async ({ title, start_time, end_time, description, location }) => {
         console.log(`Executing: Create Event "${title}"`);
         const userId = await getDefaultUserId();
         const newId = uuidv4();
 
         await pool.query(
-            `INSERT INTO events 
-            (id, user_id, title, description, start_time, end_time, location, status, all_day) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'confirmed', FALSE)`,
+            `INSERT INTO events (id, user_id, title, description, start_time, end_time, location, status, all_day) VALUES (?, ?, ?, ?, ?, ?, ?, 'confirmed', FALSE)`,
             [newId, userId, title, description || '', start_time, end_time, location || '']
         );
         return `Success! Event created with ID: ${newId}`;
     }
 };
 
-// --- 5. AI TOOL DEFINITIONS (What Gemini sees) ---
+// --- 5. AI TOOL DEFINITIONS ---
 const toolsDef = [
     {
         name: "create_task",
@@ -109,90 +106,125 @@ const toolsDef = [
 app.post('/api/chat', async (req, res) => {
     try {
         const userMessage = req.body.message;
-        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+        const sessionId = req.body.sessionId || 'default-session';
 
-        // A. Setup Model
-        // We use "gemini-flash-latest" as confirmed by your check_models.js
-        const model = genAI.getGenerativeModel({ 
-            model: "gemini-flash-latest",
-            tools: [{ functionDeclarations: toolsDef }] 
+        // 1. Setup Groq Client (Using OpenAI compatibility)
+        const client = new OpenAI({
+            apiKey: process.env.GROQ_API_KEY, // Get this from console.groq.com
+            baseURL: "https://api.groq.com/openai/v1" // <--- IMPORTANT: Points to Groq
         });
 
-        // B. Start Chat (Fresh session every time = No crashes)
-        const chat = model.startChat({
-            history: [
-                {
-                    role: "user",
-                    parts: [{ text: `
-                        You are a helpful Calendar Assistant.
-                        Current Date/Time: ${new Date().toLocaleString("en-US", { timeZone: "Asia/Jerusalem" })}
-                        
-                        RULES:
-                        1. If the user wants to do something at a specific time, use 'create_event'.
-                        2. If the user just has a to-do item or deadline, use 'create_task'.
-                        3. Always confirm back to the user what you created.
-                    `}]
-                },
-                {
-                    role: "model",
-                    parts: [{ text: "I am ready to help you manage your schedule." }]
+        // 2. Define Tools (OpenAI format is slightly different than Gemini's)
+        const tools = [
+            {
+                type: "function",
+                function: {
+                    name: "create_task",
+                    description: "Add a new item to the to-do list.",
+                    parameters: {
+                        type: "object",
+                        properties: {
+                            title: { type: "string" },
+                            due_datetime: { type: "string", description: "ISO format YYYY-MM-DD HH:MM:SS" },
+                            description: { type: "string" },
+                            priority: { type: "number", description: "1 (Low) to 5 (High)" }
+                        },
+                        required: ["title", "due_datetime"]
+                    }
                 }
-            ]
+            },
+            {
+                type: "function",
+                function: {
+                    name: "create_event",
+                    description: "Schedule an event on the calendar.",
+                    parameters: {
+                        type: "object",
+                        properties: {
+                            title: { type: "string" },
+                            start_time: { type: "string", description: "ISO format YYYY-MM-DD HH:MM:SS" },
+                            end_time: { type: "string", description: "ISO format YYYY-MM-DD HH:MM:SS" },
+                            description: { type: "string" },
+                            location: { type: "string" }
+                        },
+                        required: ["title", "start_time", "end_time"]
+                    }
+                }
+            }
+        ];
+
+        // 3. Manage History (We need to convert your history format to OpenAI's)
+        if (!activeChats[sessionId]) {
+            activeChats[sessionId] = [
+                { role: "system", content: `You are a helpful Calendar Assistant. Current Date: ${new Date().toLocaleString()}` }
+            ];
+        }
+        
+        // Add user message to history
+        activeChats[sessionId].push({ role: "user", content: userMessage });
+
+        console.log("1. Sending message to Groq...");
+        
+        // 4. Call the API
+        const response = await client.chat.completions.create({
+            model: "llama-3.3-70b-versatile", // <--- THE BEST MODEL
+            messages: activeChats[sessionId],
+            tools: tools,
+            tool_choice: "auto"
         });
 
-        console.log("1. Sending message to AI...");
-        const result = await chat.sendMessage(userMessage);
-        const response = await result.response;
+        const msg = response.choices[0].message;
         
-        // C. Handle Function Calls (The loop is built-in logic usually, but here is manual handling)
-        const calls = response.functionCalls();
-        
-        if (calls && calls.length > 0) {
-            console.log("2. AI requested tools:", calls.length);
-            const toolParts = [];
+        // Add AI response to history
+        activeChats[sessionId].push(msg);
 
-            // Execute the SQL tools
-            for (const call of calls) {
-                const fn = toolsMap[call.name];
+        // 5. Handle Tool Calls
+        if (msg.tool_calls) {
+            console.log("2. AI requested tools:", msg.tool_calls.length);
+            
+            for (const toolCall of msg.tool_calls) {
+                const fnName = toolCall.function.name;
+                const fnArgs = JSON.parse(toolCall.function.arguments);
+                const fn = toolsMap[fnName];
+
                 if (fn) {
                     try {
-                        const apiResult = await fn(call.args);
-                        toolParts.push({
-                            functionResponse: {
-                                name: call.name,
-                                response: { result: apiResult }
-                            }
+                        const toolResult = await fn(fnArgs);
+                        // Add tool result to history
+                        activeChats[sessionId].push({
+                            role: "tool",
+                            tool_call_id: toolCall.id,
+                            content: JSON.stringify({ result: toolResult })
                         });
-                    } catch (sqlError) {
-                        toolParts.push({
-                            functionResponse: {
-                                name: call.name,
-                                response: { error: sqlError.message }
-                            }
+                    } catch (err) {
+                        activeChats[sessionId].push({
+                            role: "tool",
+                            tool_call_id: toolCall.id,
+                            content: JSON.stringify({ error: err.message })
                         });
                     }
                 }
             }
 
-            // Send tool outputs back to Gemini so it can generate the final confirmation text
-            console.log("3. Sending tool results back to AI...");
-            const finalResult = await chat.sendMessage(toolParts);
-            const finalResponse = await finalResult.response;
-            
-            return res.json({ response: finalResponse.text() });
+            // 6. Final follow-up request to AI with tool results
+            const secondResponse = await client.chat.completions.create({
+                model: "llama-3.3-70b-versatile",
+                messages: activeChats[sessionId]
+            });
+
+            const finalMsg = secondResponse.choices[0].message;
+            activeChats[sessionId].push(finalMsg);
+            return res.json({ response: finalMsg.content });
         }
 
-        // D. Normal Text Response (No tools used)
-        console.log("2. No tools needed, sending text response.");
-        return res.json({ response: response.text() });
+        return res.json({ response: msg.content });
 
     } catch (error) {
-        console.error("CRASH:", error);
+        console.error("Error:", error);
         res.status(500).json({ error: error.message });
     }
 });
-
-// --- 7. OTHER ROUTES (Keep your React fetching working) ---
+// --- 7. OTHER ROUTES ---
 app.get('/api/data/events', async (req, res) => {
     const [rows] = await pool.query("SELECT * FROM events ORDER BY start_time ASC");
     res.json(rows);
@@ -203,7 +235,6 @@ app.get('/api/data/tasks', async (req, res) => {
     res.json(rows);
 });
 
-// Start
 app.listen(PORT, () => {
     console.log(`Server running on http://127.0.0.1:${PORT}`);
 });
